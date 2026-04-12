@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fenrir"
+version = "0.1.0"
+description = "Pipeline de clustering guiado por PCA con diagnosticos interpretables"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Alejandro Rodriguez" }
+]
+dependencies = [
+  "matplotlib>=3.7",
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scikit-learn>=1.3"
+]
+
+[project.optional-dependencies]
+notebook = [
+  "ipython>=8.0",
+  "ipywidgets>=8.0"
+]
+test = [
+  "openpyxl>=3.1",
+  "pytest>=7.4"
+]
+
+[tool.setuptools]
+packages = ["fenrir"]
+include-package-data = false
+
+[tool.setuptools.package-dir]
+fenrir = "."
