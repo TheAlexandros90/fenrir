@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import copy
-import importlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +11,16 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
+from ._notebook import (
+    clear_output,
+    display,
+    get_ipython,
+    publish_notebook_bindings as _publish_notebook_bindings,
+    require_matplotlib_pyplot as _require_matplotlib_pyplot,
+    require_widgets,
+    round_frame as _round_frame,
+    widgets,
+)
 from .core import Fenrir
 
 try:
@@ -21,54 +31,8 @@ except Exception:
     PatternFill = None
     get_column_letter = None
 
-try:
-    import ipywidgets as widgets
-    from IPython import get_ipython
-    from IPython.display import clear_output, display
-except Exception:
-    widgets = None
-    clear_output = None
-    display = None
-    get_ipython = None
-
-
-def _publish_notebook_bindings(**values):
-    if get_ipython is None:
-        return
-
-    shell = get_ipython()
-    if shell is None or not hasattr(shell, "user_ns"):
-        return
-
-    shell.user_ns.update(values)
-
-
 def _require_widgets():
-    if widgets is None or clear_output is None or display is None:
-        raise ImportError(
-            "ipywidgets e IPython son necesarios para la capa interactiva de Fenrir. "
-            "Instala el extra notebook con 'pip install -e .[notebook]'."
-        )
-
-
-def _require_matplotlib_pyplot():
-    try:
-        return importlib.import_module("matplotlib.pyplot")
-    except ImportError as exc:
-        raise ImportError(
-            "matplotlib es necesario para las funciones graficas de Fenrir. "
-            "Instalalo con 'pip install matplotlib'."
-        ) from exc
-
-
-def _round_frame(frame, round_digits):
-    if round_digits is None:
-        return frame
-
-    rounded = frame.copy()
-    numeric_columns = rounded.select_dtypes(include=[np.number]).columns
-    rounded.loc[:, numeric_columns] = rounded.loc[:, numeric_columns].round(int(round_digits))
-    return rounded
+    require_widgets("fenrir")
 
 
 def _key_metric_view(model):
@@ -104,12 +68,27 @@ def _default_scaler_catalog():
     }
 
 
+def default_export_dir() -> Path:
+    """Carpeta donde aterrizan las exportaciones con nombre relativo.
+
+    Por defecto, el directorio de trabajo (normalmente el del notebook), que es
+    lo que hace portables los cuadernos entre maquinas. `FENRIR_EXPORT_DIR`
+    permite fijar otra ruta sin tocar el codigo.
+    """
+
+    override = os.environ.get("FENRIR_EXPORT_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.cwd()
+
+
 def _normalize_export_path(file_name, default_stem, file_format):
     normalized_format = "txt" if file_format == "txt-list" else file_format
     raw_name = str(file_name or "").strip()
-    path = Path(raw_name) if raw_name else Path.home() / "Downloads" / f"{default_stem}.{normalized_format}"
+    base_dir = default_export_dir()
+    path = Path(raw_name) if raw_name else base_dir / f"{default_stem}.{normalized_format}"
     if not path.is_absolute():
-        path = Path.home() / "Downloads" / path
+        path = base_dir / path
 
     expected_suffix = f".{normalized_format}"
     if path.suffix.lower() != expected_suffix:
@@ -520,26 +499,29 @@ def _format_excel_sheet(writer, sheet_name: str, frame: pd.DataFrame) -> None:
 
 
 def _ordered_executive_sheets(model, report, fenrir_config, current_analysis, best_scaler, top_n_value):
+    # Los nombres de hoja son slugs estables y sin espacios: son la superficie
+    # publica del Excel (formulas, lecturas automaticas, tests) y no deben
+    # cambiar al reescribir una etiqueta de la interfaz.
     sheets = [
-        ("Resumen ejecutivo", _executive_summary_sheet(model, report=report)),
-        ("Configuracion", _config_sheet(fenrir_config, current_analysis)),
-        ("Leaderboard", model.summary(top_n=int(current_analysis["leaderboard_top_n"]))),
-        ("Metricas clave", model.metric_report()),
-        ("Tamano clusters", model.cluster_size_report()),
-        ("Perfil clusters", model.cluster_groupby(top_n=top_n_value)),
-        ("PCA componentes", model.pca_report(scaler_name=best_scaler)),
-        ("PCA variables", model.source_feature_report(scaler_name=best_scaler, top_n=max(10, top_n_value))),
-        ("Holdout resumen", report["holdout_summary"]),
-        ("Holdout top", report["holdout_top"]),
-        ("Compactos ranking", report["compact_subset_search"]),
-        ("Compacto groupby", report.get("best_compact_groupby")),
-        ("Preprocesado", report["preprocessing_report"]),
-        ("Estabilidad resumen", report.get("stability_summary")),
-        ("Estabilidad top", report.get("stability_top")),
+        ("resumen_ejecutivo", _executive_summary_sheet(model, report=report)),
+        ("configuracion", _config_sheet(fenrir_config, current_analysis)),
+        ("leaderboard", model.summary(top_n=int(current_analysis["leaderboard_top_n"]))),
+        ("metricas", model.metric_report()),
+        ("tamano_clusters", model.cluster_size_report()),
+        ("perfil_clusters", model.cluster_groupby(top_n=top_n_value)),
+        ("pca_componentes", model.pca_report(scaler_name=best_scaler)),
+        ("pca_variables", model.source_feature_report(scaler_name=best_scaler, top_n=max(10, top_n_value))),
+        ("holdout_resumen", report["holdout_summary"]),
+        ("holdout_top", report["holdout_top"]),
+        ("compactos", report["compact_subset_search"]),
+        ("compacto_groupby", report.get("best_compact_groupby")),
+        ("preprocesado", report["preprocessing_report"]),
+        ("estabilidad_resumen", report.get("stability_summary")),
+        ("estabilidad_top", report.get("stability_top")),
     ]
 
     if getattr(model, "target_", None) is not None:
-        sheets.insert(6, ("Cluster vs target", model.cluster_target_report(normalize="index")))
+        sheets.insert(6, ("cluster_vs_target", model.cluster_target_report(normalize="index")))
 
     return [(name, frame) for name, frame in sheets if frame is not None]
 

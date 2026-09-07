@@ -499,6 +499,7 @@ class Fenrir:
         scalers: dict[str, Any] | None = None,
         max_categories: int = 20,
         random_state: int = 42,
+        strict_predict_schema: bool = True,
     ):
         self.data = data.copy() if hasattr(data, "copy") else data
         self.target = target
@@ -514,6 +515,11 @@ class Fenrir:
         }
         self.max_categories = int(max_categories)
         self.random_state = random_state
+        # Con True (por defecto) predecir sobre un frame al que le faltan
+        # columnas de entrenamiento falla en vez de rellenarlas con la mediana
+        # del entrenamiento, que devuelve clusters de aspecto normal calculados
+        # sobre datos que el usuario nunca aporto.
+        self.strict_predict_schema = bool(strict_predict_schema)
 
         self.imputer_ = None
         self.feature_names_ = None
@@ -527,6 +533,7 @@ class Fenrir:
         self.cluster_models_ = {}
         self.cluster_labels_ = {}
         self.search_results_ = pd.DataFrame()
+        self.search_failures_ = pd.DataFrame()
         self.scaler_results_ = pd.DataFrame()
         self.best_result_ = None
         self.best_model_ = None
@@ -740,8 +747,9 @@ class Fenrir:
         if self.imputer_ is None or self.feature_names_ is None:
             raise RuntimeError("Fenrir todavia no ha sido ajustado.")
 
+        self._check_predict_schema(frame)
         prepared = self._encode_frame(frame, fit=False)
-        prepared = prepared.reindex(columns=self.feature_names_, fill_value=np.nan)
+        prepared = self._align_to_training_schema(prepared)
         transformed_values = np.asarray(self.imputer_.transform(prepared))
         prepared = pd.DataFrame(
             transformed_values,
@@ -749,6 +757,50 @@ class Fenrir:
             index=prepared.index,
         )
         return prepared
+
+    def _training_source_columns(self) -> list[str]:
+        """Columnas originales que alimentaron el ajuste, sin duplicados."""
+
+        return list(dict.fromkeys(self.feature_source_map_.values()))
+
+    def _check_predict_schema(self, frame) -> None:
+        """Exige que el frame de prediccion traiga las columnas del entrenamiento."""
+
+        missing = [column for column in self._training_source_columns() if column not in frame.columns]
+        if not missing:
+            return
+
+        message = (
+            "Al frame le faltan columnas usadas en el ajuste: "
+            f"{missing}. Sin ellas Fenrir tendria que inventarlas con la mediana "
+            "del entrenamiento y los clusters resultantes no describirian tus datos."
+        )
+        if self.strict_predict_schema:
+            raise ValueError(
+                message + " Aportalas, o construye el modelo con strict_predict_schema=False "
+                "si de verdad quieres imputarlas."
+            )
+
+        import warnings
+
+        warnings.warn(message + " Se imputan por mediana (strict_predict_schema=False).", UserWarning, stacklevel=3)
+
+    def _align_to_training_schema(self, prepared):
+        """Reindexa al esquema de entrenamiento distinguiendo dummies de numericas.
+
+        Un nivel categorico ausente en los datos nuevos significa "esa categoria
+        no aparece" y su dummy vale 0. Rellenarlo con NaN hacia que el imputador
+        le asignase la mediana de la dummy (p. ej. 0.3), inventando una pertenencia
+        parcial a una categoria inexistente.
+        """
+
+        aligned = prepared.reindex(columns=self.feature_names_)
+        for column in self.feature_names_:
+            if column in prepared.columns:
+                continue
+            is_dummy = self.feature_source_map_.get(column, column) != column
+            aligned[column] = 0.0 if is_dummy else np.nan
+        return aligned.loc[:, self.feature_names_]
 
     def _build_pca_profile(self, scaler_name, scaler, prepared):
         scaled_values = scaler.fit_transform(prepared)
@@ -980,6 +1032,7 @@ class Fenrir:
             scalers={name: clone(scaler) for name, scaler in self.scalers.items()},
             max_categories=self.max_categories,
             random_state=self.random_state,
+            strict_predict_schema=self.strict_predict_schema,
         )
 
     def fit(self):
@@ -1008,6 +1061,7 @@ class Fenrir:
 
         candidate_rows = []
         scaler_rows = []
+        failure_rows = []
 
         for scaler_name, base_scaler in self.scalers.items():
             scaler = clone(base_scaler)
@@ -1023,7 +1077,20 @@ class Fenrir:
                             n_clusters,
                             profile["reduced_scores"],
                         )
-                    except Exception:
+                    except Exception as exc:
+                        # Un candidato invalido (p. ej. k mayor que el numero de
+                        # puntos distintos) no debe tumbar la busqueda, pero
+                        # tampoco puede desaparecer sin dejar rastro.
+                        failure_rows.append(
+                            {
+                                "scaler_name": scaler_name,
+                                "algorithm": algorithm,
+                                "n_clusters": int(n_clusters),
+                                "n_components": int(profile["selected_components"]),
+                                "error": type(exc).__name__,
+                                "detail": str(exc),
+                            }
+                        )
                         continue
 
                     key = (
@@ -1056,8 +1123,14 @@ class Fenrir:
                 )
                 scaler_rows.append(scaler_df.iloc[0].to_dict())
 
+        self.search_failures_ = pd.DataFrame(failure_rows)
+
         if not candidate_rows:
-            raise RuntimeError("No se pudo ajustar ningun modelo de clustering valido.")
+            motivos = (
+                "; ".join(sorted({f"{row['algorithm']}/k={row['n_clusters']}: {row['detail']}" for row in failure_rows}))
+                or "no se genero ningun candidato"
+            )
+            raise RuntimeError(f"No se pudo ajustar ningun modelo de clustering valido. Motivos: {motivos}")
 
         self.search_results_ = pd.DataFrame(candidate_rows).sort_values(
             ["silhouette", "explained_variance", "calinski_harabasz", "davies_bouldin", "n_components"],
@@ -1118,6 +1191,16 @@ class Fenrir:
         if n_components is None:
             n_components = int(profile["selected_components"])
         return transformed.iloc[:, : int(n_components)].copy()
+
+    def search_failures_report(self):
+        """Candidatos descartados durante `fit()` y por que."""
+
+        self._require_fit()
+        if self.search_failures_.empty:
+            return pd.DataFrame(
+                [{"scaler_name": "(ninguno)", "algorithm": None, "n_clusters": None, "error": None, "detail": "todos los candidatos se ajustaron"}]
+            )
+        return self.search_failures_.copy()
 
     def preprocessing_report(self):
         self._require_fit()
