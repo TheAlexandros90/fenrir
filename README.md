@@ -17,6 +17,23 @@
 
 ## Estructura
 
+El repositorio es a la vez la raiz del proyecto y el paquete: `pyproject.toml`
+convive con los modulos, asi que todos los comandos de instalacion se lanzan
+desde el directorio que se clona, sin subcarpetas intermedias.
+
+```text
+fenrir/
+|-- pyproject.toml
+|-- README.md
+|-- __init__.py
+|-- core.py
+|-- interactive.py
+|-- _notebook.py
+|-- docs/
+|-- examples/
+`-- tests/
+```
+
 - `core.py`: implementacion principal de la clase `Fenrir`.
 - `interactive.py`: capa interactiva empaquetada sobre el mismo motor analitico.
 - `__init__.py`: punto de importacion limpio.
@@ -30,7 +47,7 @@
 
 ### Opcion 1. pip editable local
 
-Desde la carpeta `fenrir`:
+Desde la raiz del repositorio:
 
 ```bash
 pip install -e .
@@ -58,7 +75,7 @@ pip install "fenrir[notebook] @ git+https://github.com/<tu-usuario>/fenrir.git"
 
 ### Opcion 3. conda
 
-Desde la carpeta `fenrir`:
+Desde la raiz del repositorio:
 
 ```bash
 conda env create -f environment.yml

@@ -12,11 +12,19 @@ from sklearn.preprocessing import StandardScaler
 
 from fenrir import Fenrir
 
-BAHAMUT_SRC = Path.home() / "mnt" / "bahamut" / "src"
-if BAHAMUT_SRC.is_dir() and str(BAHAMUT_SRC) not in sys.path:
-    sys.path.insert(0, str(BAHAMUT_SRC))
+# Bahamut se usa instalado. Como respaldo, se acepta un clon hermano junto a
+# este repositorio; nunca una ruta absoluta de una maquina concreta.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _candidate in (_REPO_ROOT.parent / "bahamut" / "src", _REPO_ROOT.parent.parent / "bahamut" / "src"):
+    if (_candidate / "bahamut" / "__init__.py").is_file():
+        if str(_candidate) not in sys.path:
+            sys.path.insert(0, str(_candidate))
+        break
 
-bahamut = pytest.importorskip("bahamut", reason="bahamut no esta instalado en este entorno")
+bahamut = pytest.importorskip(
+    "bahamut",
+    reason="bahamut no esta instalado ni hay un clon hermano junto a este repositorio",
+)
 BahamutSplit = bahamut.BahamutSplit
 
 

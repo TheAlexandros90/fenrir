@@ -47,9 +47,16 @@ Eso deja dos evaluaciones con proposito distinto, y conviene no confundirlas:
 - Ser entorno de exploracion, demos y validacion visual.
 - Servir como escaparate de casos de uso del paquete.
 
+## Disposicion del repositorio
+
+La raiz del clon es tambien el paquete: `pyproject.toml` declara
+`package-dir = {fenrir = "."}`, de modo que los modulos viven junto al manifiesto
+y `pip install -e .` funciona desde el unico sitio evidente. `tests/`, `docs/` y
+`examples/` conviven en esa raiz sin entrar en el paquete instalado, porque
+`packages` los deja fuera de forma explicita.
+
 ## Siguiente paso recomendado
 
-Con la frontera con Bahamut ya cerrada, lo que queda es aplanar el repositorio: el
-paquete vive hoy dos niveles por debajo de la raiz del clon, lo que hace que las
-instrucciones de instalacion solo funcionen desde una de las dos carpetas llamadas
-`fenrir`.
+Endurecer la superficie publica con mas ejemplos de uso orientados a escenarios
+reales, ahora que el nucleo, la capa interactiva y la frontera con Bahamut tienen
+tests propios.
