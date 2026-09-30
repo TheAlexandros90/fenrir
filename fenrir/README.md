@@ -13,6 +13,7 @@
 - Graficos base de PCA y clusters.
 - Capa interactiva empaquetada con tablas de PCA y clustering.
 - Workbench con presets, persistencia JSON, comparador y exportacion ejecutiva a Excel.
+- Traspaso directo desde un bundle de Bahamut, respetando sus cortes.
 
 ## Estructura
 
@@ -104,6 +105,47 @@ Si quieres un flujo mas guiado y orientado a explotacion de resultados, revisa:
 `examples/fenrir_end_to_end_demo.ipynb` es la demo mas estable para clonar y ejecutar tal cual, porque usa datos sinteticos y no depende de ficheros externos.
 
 `examples/fenrir_dataframe_template.ipynb` es la plantilla pensada para pegar o asignar el `DataFrame` real del usuario y ajustar `target` y `exclude_columns` a sus columnas.
+
+## Traspaso desde Bahamut
+
+Si los cortes ya los decidio Bahamut, Fenrir puede respetarlos en vez de inventarse
+sus propias particiones:
+
+```python
+from bahamut import BahamutSplit
+from fenrir import Fenrir
+
+segmentos = (
+    BahamutSplit(df)
+    .definir_problema("clasificacion")
+    .definir_objetivo("segmento")
+    .definir_estratificacion(modo="target")
+    .configurar_split(test_size=0.2, validation_size=0.2, shuffle=True, random_state=11)
+    .ejecutar_segmentacion()
+)
+
+modelo = Fenrir.from_bahamut(segmentos, fit=True)
+print(modelo.bahamut_split_report())
+```
+
+`from_bahamut()` ajusta solo con el bloque `train`. `evaluate_bahamut_splits()`
+proyecta `validation` y `test` con el mismo escalado y el mismo PCA del ajuste y
+les asigna clusters con el modelo base: no reajusta nada. Es la lectura fuera de
+muestra que corresponde a los cortes decididos aguas arriba.
+
+La diferencia con `evaluate_holdout()` importa: ese metodo se inventa particiones
+aleatorias y reajusta el pipeline entero en cada una, lo que responde a otra
+pregunta ("como de estable es la busqueda") y no a esta ("como se comporta *este*
+modelo en los bloques que aparte").
+
+Detalles utiles:
+
+- La columna objetivo se deduce de `y_train` cuando trae una sola columna; si trae
+  varias, hay que elegir con `target=`.
+- `df=dataframe_original` rehidrata cada bloque por indices y recupera las columnas
+  que Bahamut dejo fuera de `feature_cols`.
+- Funciona tambien con `agglomerative`, que no admite `predict()`: los bloques no
+  vistos se asignan al centroide mas cercano del ajuste.
 
 ## Workbench interactivo
 

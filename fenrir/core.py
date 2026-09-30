@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import numpy as np
 import pandas as pd
-from typing import Any, Literal, overload
+from typing import Any, Literal, Mapping, overload
 from sklearn.base import clone
 from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.decomposition import PCA
@@ -484,6 +484,105 @@ def _decorate_cluster_groupby_table(frame: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
+_BAHAMUT_SPLITS = (
+    ("train", "X_train", "y_train", "indices_train"),
+    ("validation", "X_validation", "y_validation", "indices_validation"),
+    ("test", "X_test", "y_test", "indices_test"),
+)
+
+
+def _looks_like_bahamut_segments(segments) -> bool:
+    if not isinstance(segments, Mapping):
+        return False
+    return "X_train" in segments and any(str(key).startswith("indices_") for key in segments)
+
+
+def _coerce_bahamut_target(target_like, split_name: str):
+    """Normaliza y_train / y_validation / y_test a DataFrame o None."""
+
+    if target_like is None:
+        return None
+    if isinstance(target_like, pd.Series):
+        if target_like.name is None:
+            raise ValueError(
+                f"El bloque '{split_name}' de Bahamut trae una serie objetivo sin nombre. "
+                "Renombrala o indica target= explicitamente."
+            )
+        return target_like.to_frame()
+    if isinstance(target_like, pd.DataFrame):
+        return target_like.copy()
+    raise TypeError(f"El bloque '{split_name}' de Bahamut trae un objetivo de tipo no soportado: {type(target_like)!r}")
+
+
+def _resolve_bahamut_target_name(segments, target=None) -> str | None:
+    """Decide que columna hace de objetivo al leer un bundle de Bahamut."""
+
+    if target is not None:
+        return str(target)
+
+    target_frame = _coerce_bahamut_target(segments.get("y_train"), "train")
+    if target_frame is None or target_frame.shape[1] == 0:
+        return None
+    if target_frame.shape[1] == 1:
+        return str(target_frame.columns[0])
+
+    raise ValueError(
+        "El bundle de Bahamut trae varias columnas objetivo "
+        f"({list(target_frame.columns)}). Fenrir perfila clusters contra una sola: "
+        "indica cual con target=."
+    )
+
+
+def _bahamut_frames_from_segments(segments, df=None) -> dict[str, pd.DataFrame]:
+    """Reconstruye un DataFrame por bloque a partir de los segmentos de Bahamut.
+
+    Con `df` se rehidratan los bloques desde el DataFrame original usando los
+    indices del bundle, lo que recupera las columnas que Bahamut dejo fuera de
+    `feature_cols`. Sin el, cada bloque se arma con X_* mas y_*.
+    """
+
+    if not _looks_like_bahamut_segments(segments):
+        raise TypeError(
+            "Esto no parece un bundle de Bahamut: falta 'X_train' o los indices por bloque. "
+            "Pasa el diccionario que devuelve BahamutSplit.ejecutar_segmentacion()."
+        )
+
+    frames: dict[str, pd.DataFrame] = {}
+
+    for split_name, x_key, y_key, index_key in _BAHAMUT_SPLITS:
+        x_part = segments.get(x_key)
+        if x_part is None:
+            continue
+
+        if df is not None:
+            indices = segments.get(index_key)
+            if indices is None:
+                raise ValueError(
+                    f"Para rehidratar el bloque '{split_name}' desde df hace falta '{index_key}' en el bundle."
+                )
+            frames[split_name] = df.loc[list(indices)].copy()
+            continue
+
+        if not isinstance(x_part, pd.DataFrame):
+            raise TypeError(f"La clave '{x_key}' de Bahamut deberia ser un pandas.DataFrame.")
+
+        frame = x_part.copy()
+        target_frame = _coerce_bahamut_target(segments.get(y_key), split_name)
+        if target_frame is not None:
+            overlap = sorted(set(frame.columns) & set(target_frame.columns))
+            if overlap:
+                raise ValueError(
+                    f"El bloque '{split_name}' de Bahamut tiene columnas repetidas entre X e y: {overlap}"
+                )
+            frame = frame.join(target_frame)
+        frames[split_name] = frame
+
+    if "train" not in frames:
+        raise ValueError("El bundle de Bahamut no contiene bloque de entrenamiento.")
+
+    return frames
+
+
 class Fenrir:
     """Pipeline de clustering guiado por PCA con diagnosticos interpretables."""
 
@@ -549,6 +648,61 @@ class Fenrir:
         self.stability_results_ = pd.DataFrame()
         self.stability_summary_ = pd.DataFrame()
         self.analysis_report_ = {}
+
+        # Bundle de Bahamut cuando la instancia nace de from_bahamut().
+        self.bahamut_segments_ = None
+        self.bahamut_frames_: dict[str, pd.DataFrame] = {}
+        self.bahamut_split_results_ = pd.DataFrame()
+
+    @classmethod
+    def from_bahamut(
+        cls,
+        segments,
+        *,
+        df=None,
+        target=None,
+        fit: bool = False,
+        **kwargs,
+    ) -> "Fenrir":
+        """Construye un Fenrir sobre el bloque de entrenamiento de un bundle de Bahamut.
+
+        Bahamut decide los cortes; Fenrir los respeta. La instancia se ajusta solo
+        con `train`, y `evaluate_bahamut_splits()` puntua validation y test como
+        lo que son: bloques que el modelo no ha visto. Es la alternativa honesta a
+        `evaluate_holdout()`, que se inventa sus propias particiones aleatorias e
+        ignora la segmentacion que ya habias decidido aguas arriba.
+
+        Parameters
+        ----------
+        segments
+            El diccionario que devuelve `BahamutSplit.ejecutar_segmentacion()`.
+        df
+            DataFrame original, opcional. Con el, cada bloque se rehidrata por
+            indices y recupera las columnas que Bahamut dejo fuera de feature_cols.
+        target
+            Columna objetivo. Si se omite se deduce de `y_train` cuando este trae
+            una sola columna.
+        fit
+            Ajusta antes de devolver la instancia.
+        """
+
+        target_name = _resolve_bahamut_target_name(segments, target=target)
+        frames = _bahamut_frames_from_segments(segments, df=df)
+
+        train_frame = frames["train"]
+        if target_name is not None and target_name not in train_frame.columns:
+            raise ValueError(
+                f"La columna objetivo '{target_name}' no esta en el bloque de entrenamiento. "
+                "Pasa df=dataframe_original si esa columna no viaja dentro del bundle."
+            )
+
+        model = cls(train_frame, target=target_name, **kwargs)
+        model.bahamut_segments_ = segments
+        model.bahamut_frames_ = frames
+
+        if fit:
+            model.fit()
+        return model
 
     @staticmethod
     def metric_reference():
@@ -1615,6 +1769,144 @@ class Fenrir:
                 }
             )
         return _decorate_metric_table(pd.DataFrame(rows))
+
+    def _bahamut_frames(self, segments=None, df=None) -> dict[str, pd.DataFrame]:
+        if segments is not None:
+            return _bahamut_frames_from_segments(segments, df=df)
+        if self.bahamut_frames_:
+            return self.bahamut_frames_
+        if self.bahamut_segments_ is not None:
+            return _bahamut_frames_from_segments(self.bahamut_segments_, df=df)
+        raise RuntimeError(
+            "Esta instancia no nacio de un bundle de Bahamut. Construyela con "
+            "Fenrir.from_bahamut(segmentos) o pasa segments= a este metodo."
+        )
+
+    def evaluate_bahamut_splits(self, segments=None, df=None, include_train: bool = True):
+        """Puntua los bloques de Bahamut con el modelo ajustado solo sobre train.
+
+        A diferencia de `evaluate_holdout()`, aqui no se reajusta nada ni se
+        inventan particiones: se proyectan validation y test con el PCA y el
+        escalado del ajuste y se les asignan clusters con el modelo base. Es la
+        lectura fuera de muestra que corresponde a los cortes que decidio Bahamut.
+        """
+
+        self._require_fit()
+        frames = self._bahamut_frames(segments=segments, df=df)
+
+        best_result = self._require_best_result()
+        best_model = self._require_best_model()
+        algorithm = str(best_result["algorithm"])
+        n_components = int(best_result["n_components"])
+
+        profile = self._profile_for()
+        train_projection = profile["reduced_scores"].iloc[:, :n_components]
+        train_labels = np.asarray(self._require_best_labels())
+
+        rows = []
+        for split_name in ("train", "validation", "test"):
+            frame = frames.get(split_name)
+            if frame is None or frame.empty:
+                continue
+            if split_name == "train" and not include_train:
+                continue
+
+            _, target_series = self._extract_target(self._as_frame(frame), fit=False)
+
+            if split_name == "train":
+                projection = train_projection
+                labels = train_labels
+            else:
+                prepared = self._prepare_frame(frame, fit=False)
+                projection = self._project_with_profile(prepared, profile).iloc[:, :n_components]
+                labels = np.asarray(
+                    self._assign_candidate_labels(
+                        best_model,
+                        algorithm,
+                        train_projection,
+                        train_labels,
+                        projection,
+                    )
+                )
+
+            label_series = pd.Series(labels, index=projection.index, name="cluster")
+            shares = label_series.value_counts(normalize=True)
+
+            row = {
+                "split": split_name,
+                "origen": "ajuste" if split_name == "train" else "fuera de muestra",
+                "n_filas": int(len(projection)),
+                "n_clusters_observados": int(label_series.nunique()),
+                "cluster_min_share": float(shares.min()) if len(shares) else np.nan,
+            }
+            row.update(self._score_internal(projection, labels))
+            row.update(self._score_external(target_series, labels, index=projection.index))
+            rows.append(row)
+
+        if not rows:
+            raise RuntimeError("El bundle de Bahamut no dejo ningun bloque evaluable.")
+
+        results = pd.DataFrame(rows)
+        self.bahamut_split_results_ = results
+        return results.copy()
+
+    def bahamut_split_report(self, segments=None, df=None, include_train: bool = True):
+        """Version interpretada de `evaluate_bahamut_splits()`."""
+
+        results = (
+            self.bahamut_split_results_.copy()
+            if segments is None and df is None and not self.bahamut_split_results_.empty
+            else self.evaluate_bahamut_splits(segments=segments, df=df, include_train=include_train)
+        )
+        if not include_train:
+            results = results[results["split"] != "train"].reset_index(drop=True)
+
+        table = results.copy()
+        table["silhouette_reading"] = table["silhouette"].map(
+            lambda value: _interpret_metric("silhouette", value)
+        )
+        table["davies_bouldin_reading"] = table["davies_bouldin"].map(
+            lambda value: _interpret_metric("davies_bouldin", value)
+        )
+        if "v_measure" in table.columns:
+            table["target_alignment_reading"] = table["v_measure"].map(
+                lambda value: _interpret_metric("v_measure", value)
+            )
+        table["cluster_balance"] = table["cluster_min_share"].map(_interpret_cluster_share)
+
+        table = _round_existing_columns(
+            table,
+            [
+                "cluster_min_share",
+                "silhouette",
+                "calinski_harabasz",
+                "davies_bouldin",
+                "ari",
+                "nmi",
+                "v_measure",
+            ],
+        )
+
+        preferred = [
+            "split",
+            "origen",
+            "n_filas",
+            "n_clusters_observados",
+            "cluster_min_share",
+            "cluster_balance",
+            "silhouette",
+            "silhouette_reading",
+            "davies_bouldin",
+            "davies_bouldin_reading",
+            "calinski_harabasz",
+            "v_measure",
+            "target_alignment_reading",
+            "nmi",
+            "ari",
+        ]
+        ordered = [column for column in preferred if column in table.columns]
+        ordered += [column for column in table.columns if column not in ordered]
+        return table.loc[:, ordered]
 
     def evaluate_holdout(
         self,
