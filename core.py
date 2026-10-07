@@ -2130,6 +2130,12 @@ class Fenrir:
         required_min_cluster_size = max(share_based_min_size, 1 if min_cluster_size is None else int(min_cluster_size))
         target_arg = self.target if isinstance(self.target, str) else self.target_.copy() if self.target_ is not None else None
 
+        self.influential_subset_search_ = pd.DataFrame()
+        self.influential_subset_models_ = {}
+        self.best_influential_subset_ = None
+        self.best_influential_variables_ = []
+        self.best_influential_fenrir_ = None
+
         results = []
         models = {}
 
@@ -2204,7 +2210,14 @@ class Fenrir:
 
         self.influential_subset_search_ = results_df
         self.influential_subset_models_ = models
-        self.best_influential_subset_ = results_df.iloc[0].to_dict()
+        valid_results = results_df.loc[results_df["passes_cluster_guard"]]
+        if valid_results.empty:
+            raise ValueError(
+                "Ningun subconjunto cumple el tamano minimo de cluster "
+                f"({required_min_cluster_size} filas). "
+                "Consulta influential_subset_search_ para revisar los candidatos descartados."
+            )
+        self.best_influential_subset_ = valid_results.iloc[0].to_dict()
         self.best_influential_variables_ = list(self.best_influential_subset_["selected_variables"])
         self.best_influential_fenrir_ = models[int(self.best_influential_subset_["n_selected_features"])]
         return results_df.copy()

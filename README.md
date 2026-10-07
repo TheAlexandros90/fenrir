@@ -112,6 +112,12 @@ print(model.best_configuration())
 
 Fenrir no depende de un dataset concreto. Recibe el `DataFrame` que el usuario quiera analizar y, si existe, una columna objetivo opcional para enriquecer la lectura de clusters.
 
+La busqueda de subconjuntos compactos exige que algun candidato cumpla el tamano
+minimo de cluster configurado. Si ninguno lo cumple, `search_influential_subsets()`
+lanza `ValueError` y no conserva una seleccion anterior como mejor modelo.
+La tabla `influential_subset_search_` sigue disponible para revisar los candidatos
+descartados.
+
 ## Notebook de referencia
 
 Si quieres un flujo mas guiado y orientado a explotacion de resultados, revisa:

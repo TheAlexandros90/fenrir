@@ -35,6 +35,35 @@ def fit_model(frame: pd.DataFrame, **overrides) -> Fenrir:
     return Fenrir(frame, **kwargs).fit()
 
 
+def test_compact_search_rejects_all_candidates_below_minimum_cluster_size():
+    frame = build_frame(n=20)
+    model = fit_model(frame)
+
+    with pytest.raises(ValueError, match="Ningun subconjunto cumple"):
+        model.search_influential_subsets(max_features=2, min_cluster_size=len(frame))
+
+    assert not model.influential_subset_search_.empty
+    assert not model.influential_subset_search_["passes_cluster_guard"].any()
+    assert model.best_influential_subset_ is None
+    assert model.best_influential_variables_ == []
+    assert model.best_influential_fenrir_ is None
+
+
+def test_failed_compact_search_clears_previous_best_model():
+    frame = build_frame(n=20)
+    model = fit_model(frame)
+    model.search_influential_subsets(max_features=2, min_cluster_share=0)
+    assert model.best_influential_model() is not None
+
+    with pytest.raises(ValueError, match="Ningun subconjunto cumple"):
+        model.search_influential_subsets(max_features=2, min_cluster_share=1)
+
+    with pytest.raises(RuntimeError, match="search_influential_subsets"):
+        model.best_influential_model()
+    with pytest.raises(RuntimeError, match="search_influential_subsets"):
+        model.best_influential_variable_list()
+
+
 # --------------------------------------------------------------------------
 # Esquema de prediccion
 # --------------------------------------------------------------------------
