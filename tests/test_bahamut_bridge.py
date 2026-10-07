@@ -233,6 +233,35 @@ def test_multi_target_exige_elegir_columna(frame):
 
     model = Fenrir.from_bahamut(segmentos, target="segmento", **MODEL_KWARGS)
     assert model.target == "segmento"
+    model.fit()
+    assert "canal" not in model.raw_training_frame_.columns
+
+
+def test_rehidratar_no_reintroduce_predictoras_excluidas(frame, segmentos):
+    model = Fenrir.from_bahamut(segmentos, df=frame, fit=True, **MODEL_KWARGS)
+    assert "id_cliente" in model.bahamut_frames_["train"].columns
+    assert "id_cliente" not in model.raw_training_frame_.columns
+
+
+def test_rehidratar_rechaza_indice_ambiguo(frame, segmentos):
+    ambiguous = pd.concat([frame, frame.iloc[:1]])
+    with pytest.raises(ValueError, match="indice unico"):
+        Fenrir.from_bahamut(segmentos, df=ambiguous)
+
+
+def test_bundle_con_indice_repetido_no_multiplica_filas():
+    x = pd.DataFrame({"x1": [1, 2, 3], "x2": [4, 5, 6]}, index=[0, 0, 1])
+    y = pd.Series(["a", "b", "c"], index=x.index, name="target")
+    model = Fenrir.from_bahamut({"X_train": x, "y_train": y, "indices_train": x.index})
+    assert len(model.data) == 3
+    assert model.data["target"].tolist() == ["a", "b", "c"]
+
+
+def test_bundle_rechaza_objetivo_desalineado():
+    x = pd.DataFrame({"x1": [1, 2], "x2": [4, 5]}, index=[0, 1])
+    y = pd.Series(["a", "b"], index=[1, 0], name="target")
+    with pytest.raises(ValueError, match="indices de X e y"):
+        Fenrir.from_bahamut({"X_train": x, "y_train": y, "indices_train": x.index})
 
 
 def test_evaluar_sin_ajustar_falla(segmentos):

@@ -555,6 +555,11 @@ def _bahamut_frames_from_segments(segments, df=None) -> dict[str, pd.DataFrame]:
             continue
 
         if df is not None:
+            if not df.index.is_unique:
+                raise ValueError(
+                    "df debe tener un indice unico para rehidratar los bloques de Bahamut. "
+                    "Usa reset_index(drop=True) antes de crear los segmentos."
+                )
             indices = segments.get(index_key)
             if indices is None:
                 raise ValueError(
@@ -574,7 +579,11 @@ def _bahamut_frames_from_segments(segments, df=None) -> dict[str, pd.DataFrame]:
                 raise ValueError(
                     f"El bloque '{split_name}' de Bahamut tiene columnas repetidas entre X e y: {overlap}"
                 )
-            frame = frame.join(target_frame)
+            if not frame.index.equals(target_frame.index):
+                raise ValueError(f"Los indices de X e y no coinciden en el bloque '{split_name}'.")
+            # Asignacion posicional: join multiplica filas con indices repetidos.
+            for column in target_frame.columns:
+                frame[column] = target_frame[column].to_numpy()
         frames[split_name] = frame
 
     if "train" not in frames:
@@ -696,6 +705,10 @@ class Fenrir:
                 "Pasa df=dataframe_original si esa columna no viaja dentro del bundle."
             )
 
+        # Rehidratar df no debe reintroducir identificadores, exclusiones u otros
+        # objetivos como predictoras. Un features explicito sigue siendo posible.
+        if kwargs.get("features") is None:
+            kwargs["features"] = list(segments["X_train"].columns)
         model = cls(train_frame, target=target_name, **kwargs)
         model.bahamut_segments_ = segments
         model.bahamut_frames_ = frames

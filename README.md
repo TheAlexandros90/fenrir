@@ -160,7 +160,9 @@ Detalles utiles:
 - La columna objetivo se deduce de `y_train` cuando trae una sola columna; si trae
   varias, hay que elegir con `target=`.
 - `df=dataframe_original` rehidrata cada bloque por indices y recupera las columnas
-  que Bahamut dejo fuera de `feature_cols`.
+  que Bahamut dejo fuera de `feature_cols`. El indice de `df` debe ser unico.
+  Esas columnas quedan disponibles para consultar, pero las predictoras siguen
+  siendo las de `X_train`; puedes cambiarlas de forma explicita con `features=`.
 - Funciona tambien con `agglomerative`, que no admite `predict()`: los bloques no
   vistos se asignan al centroide mas cercano del ajuste.
 
