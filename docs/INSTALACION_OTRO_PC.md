@@ -24,7 +24,7 @@ python -c "from fenrir import Fenrir; print(Fenrir.__name__)"
 
 ## Opcion recomendada con conda
 
-1. Copia la carpeta `fenrir` completa al otro PC.
+1. Copia el repositorio completo al otro PC.
 2. Abre una terminal en esa carpeta.
 3. Ejecuta:
 
@@ -42,7 +42,7 @@ python examples/smoke_test.py
 ## Opcion con pip si clonas o copias el repo
 
 1. Crea un entorno virtual.
-2. Entra en la carpeta `fenrir`.
+2. Entra en la raiz del repositorio (donde esta `pyproject.toml`).
 3. Ejecuta:
 
 ```bash

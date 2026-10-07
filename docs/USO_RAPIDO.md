@@ -46,6 +46,18 @@ print(fenrir.cluster_target_report())
 print(fenrir.evaluate_holdout())
 ```
 
+## Desde un bundle de Bahamut
+
+```python
+from fenrir import Fenrir
+
+modelo = Fenrir.from_bahamut(segmentos, fit=True)
+print(modelo.bahamut_split_report())
+```
+
+Ajusta solo con `train` y puntua `validation` y `test` sin reajustar. Ver el README
+para las opciones (`target=`, `df=`, `include_train=`).
+
 ## Metodos clave
 
 - `fit()`
@@ -56,5 +68,6 @@ print(fenrir.evaluate_holdout())
 - `cluster_size_report()`
 - `cluster_groupby()`
 - `evaluate_holdout()`
+- `from_bahamut(segmentos)` y `evaluate_bahamut_splits()`
 - `evaluate_stability()`
 - `analysis_report()`
